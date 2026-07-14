@@ -7,15 +7,8 @@ const trimmedOptional = z
   .optional()
   .transform((value) => value ?? "")
 
-export const contactSchema = z.object({
+const attributionFields = {
   leadId: z.string().trim().min(1).max(100),
-  name: z.string().trim().min(3, "Nome muito curto").max(200),
-  email: z.string().trim().email("E-mail inválido").max(200),
-  phone: z
-    .string()
-    .trim()
-    .min(8, "Telefone inválido")
-    .max(30),
   utmSource: trimmedOptional,
   utmMedium: trimmedOptional,
   utmCampaign: trimmedOptional,
@@ -25,6 +18,22 @@ export const contactSchema = z.object({
   landingUrl: trimmedOptional,
   // honeypot: campo invisível no formulário. Se vier preenchido, é bot.
   honeypot: z.string().optional().default(""),
+}
+
+// Usado quando alguém só chega na página (ainda não preencheu nada).
+export const visitSchema = z.object(attributionFields)
+
+// Usado nas etapas que já têm nome/e-mail/telefone (lead e checkout).
+export const contactSchema = z.object({
+  ...attributionFields,
+  name: z.string().trim().min(3, "Nome muito curto").max(200),
+  email: z.email("E-mail inválido").trim().max(200),
+  phone: z
+    .string()
+    .trim()
+    .min(8, "Telefone inválido")
+    .max(30),
 })
 
+export type VisitInput = z.infer<typeof visitSchema>
 export type ContactInput = z.infer<typeof contactSchema>

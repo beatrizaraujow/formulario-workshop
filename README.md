@@ -1,28 +1,30 @@
 # Formulário Workshop — API
 
-Backend do formulário de inscrição do workshop. O **formulário em si continua no Framer** (veja [`framer-component/CheckoutForm.tsx`](framer-component/CheckoutForm.tsx)); este projeto Next.js só publica 3 rotas de API no Vercel:
+Backend do formulário de inscrição do workshop. O **formulário em si continua no Framer** (veja [`framer-component/CheckoutForm.tsx`](framer-component/CheckoutForm.tsx)); este projeto Next.js só publica as rotas de API no Vercel:
 
+- `POST /api/visit` — grava uma linha assim que alguém **chega na página** (antes mesmo de preencher qualquer coisa), com UTMs e referrer. Só dispara uma vez por visitante/campanha (não a cada F5).
 - `POST /api/lead` — grava um lead na planilha do Google assim que a Etapa 1 (nome/e-mail/telefone) é concluída, junto com UTMs, referrer e página de entrada.
 - `POST /api/checkout` — cria uma sessão de pagamento no Stripe (R$97, Pix ou cartão) e devolve a URL de checkout.
-- `POST /api/webhook/stripe` — recebido diretamente pelo Stripe quando o pagamento é aprovado; grava uma segunda linha na planilha confirmando o pagamento.
+- `POST /api/webhook/stripe` — recebido diretamente pelo Stripe quando o pagamento é aprovado; grava uma linha na planilha confirmando o pagamento.
 
-Cada envio de formulário gera **duas linhas possíveis** na planilha: `lead_criado` (assim que preenche os dados) e `pagamento_aprovado` (só depois que o Stripe confirma o pagamento). Isso permite calcular a taxa de conversão lead → pagamento e ver quem abandonou o checkout.
+Cada visitante pode gerar até **três linhas** na planilha: `visita_pagina` (chegou), `lead_criado` (preencheu os dados) e `pagamento_aprovado` (pagou). Isso dá o funil completo — quantos chegaram, quantos preencheram, quantos pagaram — e de onde veio cada um (UTM).
 
 ---
 
-## 1. Configurar o Google Sheets
+## 1. Configurar o Google Sheets (via Apps Script — sem Google Cloud)
 
-1. Crie a planilha no Google Sheets (pode ser em branco). Renomeie a primeira aba para `Respostas` (ou defina `GOOGLE_SHEET_TAB` com o nome que escolher).
-2. Na primeira linha, crie o cabeçalho (colunas A→P):
-   `Timestamp | Evento | Lead ID | Nome | Email | Telefone | Valor | UTM Source | UTM Medium | UTM Campaign | UTM Term | UTM Content | Referrer | Landing Page | Stripe Session ID | Stripe Payment Intent`
-3. Copie o ID da planilha da URL: `docs.google.com/spreadsheets/d/{ESTE_TRECHO}/edit` → variável `GOOGLE_SHEET_ID`.
-4. Crie uma conta de serviço no Google Cloud:
-   - Acesse [console.cloud.google.com](https://console.cloud.google.com/), crie um projeto (ou use um existente).
-   - Ative a **Google Sheets API** (menu "APIs e serviços" → "Ativar APIs e serviços").
-   - Vá em "Credenciais" → "Criar credenciais" → "Conta de serviço". Dê um nome qualquer e conclua.
-   - Abra a conta de serviço criada → aba "Chaves" → "Adicionar chave" → "Criar nova chave" → JSON. Um arquivo `.json` será baixado.
-5. Abra o `.json` baixado: copie o `client_email` para `GOOGLE_CLIENT_EMAIL` e o `private_key` para `GOOGLE_PRIVATE_KEY` (mantenha as quebras de linha `\n` como estão).
-6. **Compartilhe a planilha** com o e-mail da conta de serviço (o `client_email`), com permissão de **Editor** — do contrário a API não consegue gravar nada.
+Nada de Google Cloud Console, API key ou service account: o script roda direto de dentro da planilha, com as permissões do próprio dono dela.
+
+1. Crie a planilha no Google Sheets (pode ser em branco).
+2. Menu **Extensões → Apps Script**. Apague o conteúdo padrão do editor e cole o conteúdo de [`google-apps-script/Code.gs`](google-apps-script/Code.gs) deste repositório.
+3. Salve (ícone de disquete). Dê um nome ao projeto se pedir (ex: "Formulário Workshop").
+4. Clique em **Implantar → Nova implantação**. Em "Tipo", escolha **App da Web**. Configure:
+   - Executar como: **Eu (seu e-mail)**
+   - Quem pode acessar: **Qualquer pessoa**
+5. Clique em Implantar, autorize o acesso quando o Google pedir (é o seu próprio script, pode aceitar), e copie a **URL do app da Web** gerada (termina em `/exec`) → variável `GOOGLE_SHEETS_WEBHOOK_URL`.
+6. Pronto — o próprio script cria a aba `Respostas` e o cabeçalho automaticamente na primeira chamada. Pra testar, cole a URL `/exec` no navegador: deve aparecer `{"ok":true,"message":"Endpoint ativo..."}`.
+
+> Sempre que editar o `Code.gs`, é preciso **implantar de novo** ("Gerenciar implantações" → editar → nova versão) para as mudanças valerem na URL publicada.
 
 ## 2. Configurar o Stripe
 
@@ -71,11 +73,12 @@ Depois do primeiro deploy:
 
 ## 6. Testar de ponta a ponta
 
-1. Preencha a Etapa 1 do formulário publicado → confira se uma linha `lead_criado` apareceu na planilha.
-2. Clique em "Ir para o pagamento" → complete o pagamento com um [cartão de teste do Stripe](https://docs.stripe.com/testing#cards) (ex: `4242 4242 4242 4242`, qualquer data futura e CVC).
-3. Confira se uma linha `pagamento_aprovado` apareceu na planilha e se o Stripe redirecionou para `STRIPE_SUCCESS_URL`.
-4. Teste também com parâmetros UTM na URL, ex: `?utm_source=instagram&utm_medium=bio&utm_campaign=lancamento`, e confira se essas colunas foram preenchidas.
-5. Quando tudo estiver validado, troque a chave do Stripe de `sk_test_...` para `sk_live_...` (e refaça o webhook em modo live — os webhooks de teste e produção são independentes no Stripe).
+1. Abra a página publicada → confira se uma linha `visita_pagina` apareceu na planilha (só na primeira vez; um F5 não gera outra).
+2. Preencha a Etapa 1 → confira se uma linha `lead_criado` apareceu na planilha.
+3. Clique em "Ir para o pagamento" → complete o pagamento com um [cartão de teste do Stripe](https://docs.stripe.com/testing#cards) (ex: `4242 4242 4242 4242`, qualquer data futura e CVC).
+4. Confira se uma linha `pagamento_aprovado` apareceu na planilha e se o Stripe redirecionou para `STRIPE_SUCCESS_URL`.
+5. Teste também com parâmetros UTM na URL, ex: `?utm_source=instagram&utm_medium=bio&utm_campaign=lancamento`, e confira se essas colunas foram preenchidas nas três linhas.
+6. Quando tudo estiver validado, troque a chave do Stripe de `sk_test_...` para `sk_live_...` (e refaça o webhook em modo live — os webhooks de teste e produção são independentes no Stripe).
 
 ---
 
@@ -86,5 +89,5 @@ Depois do primeiro deploy:
 - **Pixel de conversão server-side**: disparar Meta Conversions API / Google Ads Enhanced Conversions a partir do webhook do Stripe (não do navegador) é mais confiável que pixel client-side, porque não depende de ad blocker nem de o usuário fechar a aba antes de carregar o pixel.
 - **Domínio próprio**: hoje a API fica em `*.vercel.app`; dá pra apontar um subdomínio seu (ex: `api.seudominio.com`) no Vercel para ficar mais profissional e não depender do domínio da Vercel.
 - **Dashboard simples**: um painel autenticado que lê a planilha (ou um banco) e mostra o funil (leads → pagos, por UTM) sem precisar abrir o Google Sheets.
-- **Monitoramento de erro**: setar algo como Sentry nas rotas de API para saber na hora se o Stripe ou o Google Sheets começarem a falhar, em vez de descobrir só quando notar a planilha "parada".
-- **Migrar para banco de dados** se o volume de inscrições crescer bastante: a Sheets API tem limite de ~300 requisições/min por projeto, tranquilo para um workshop mas não para escala maior.
+- **Monitoramento de erro**: setar algo como Sentry nas rotas de API para saber na hora se o Stripe ou o Apps Script começarem a falhar, em vez de descobrir só quando notar a planilha "parada".
+- **Migrar para banco de dados** se o volume de inscrições crescer bastante: o Apps Script tem cota diária de execuções (generosa para um workshop, mas não pensada para alto volume/escala).

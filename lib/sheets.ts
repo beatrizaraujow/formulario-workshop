@@ -1,32 +1,8 @@
-import { google, sheets_v4 } from "googleapis"
-
-let cachedClient: sheets_v4.Sheets | null = null
-
-function getSheetsClient(): sheets_v4.Sheets {
-  if (cachedClient) return cachedClient
-
-  const email = process.env.GOOGLE_CLIENT_EMAIL
-  const privateKey = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, "\n")
-
-  if (!email || !privateKey) {
-    throw new Error(
-      "Credenciais do Google não configuradas (GOOGLE_CLIENT_EMAIL / GOOGLE_PRIVATE_KEY)."
-    )
-  }
-
-  const auth = new google.auth.JWT({
-    email,
-    key: privateKey,
-    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
-  })
-
-  cachedClient = google.sheets({ version: "v4", auth })
-  return cachedClient
-}
-
-const SHEET_TAB = process.env.GOOGLE_SHEET_TAB ?? "Respostas"
-
 /**
+ * Grava linhas na planilha via um Google Apps Script Web App (função doPost
+ * em `google-apps-script/Code.gs`, colada direto no editor de Apps Script da
+ * própria planilha — sem Google Cloud Console, sem service account).
+ *
  * Layout de colunas da aba (deixe essa ordem no cabeçalho da planilha):
  * A: Timestamp | B: Evento | C: Lead ID | D: Nome | E: Email | F: Telefone
  * G: Valor (R$) | H: UTM Source | I: UTM Medium | J: UTM Campaign
@@ -34,7 +10,7 @@ const SHEET_TAB = process.env.GOOGLE_SHEET_TAB ?? "Respostas"
  * O: Stripe Session ID | P: Stripe Payment Intent
  */
 export type SheetRow = {
-  event: "lead_criado" | "pagamento_aprovado"
+  event: "visita_pagina" | "lead_criado" | "pagamento_aprovado"
   leadId: string
   name: string
   email: string
@@ -52,39 +28,36 @@ export type SheetRow = {
 }
 
 export async function appendSheetRow(row: SheetRow): Promise<void> {
-  const spreadsheetId = process.env.GOOGLE_SHEET_ID
-  if (!spreadsheetId) {
-    throw new Error("GOOGLE_SHEET_ID não configurado.")
+  const webhookUrl = process.env.GOOGLE_SHEETS_WEBHOOK_URL
+  if (!webhookUrl) {
+    throw new Error("GOOGLE_SHEETS_WEBHOOK_URL não configurado.")
   }
 
-  const sheets = getSheetsClient()
-
-  await sheets.spreadsheets.values.append({
-    spreadsheetId,
-    range: `${SHEET_TAB}!A:A`,
-    valueInputOption: "USER_ENTERED",
-    insertDataOption: "INSERT_ROWS",
-    requestBody: {
-      values: [
-        [
-          new Date().toISOString(),
-          row.event,
-          row.leadId,
-          row.name,
-          row.email,
-          row.phone,
-          row.amount ?? "",
-          row.utmSource ?? "",
-          row.utmMedium ?? "",
-          row.utmCampaign ?? "",
-          row.utmTerm ?? "",
-          row.utmContent ?? "",
-          row.referrer ?? "",
-          row.landingUrl ?? "",
-          row.stripeSessionId ?? "",
-          row.stripePaymentIntent ?? "",
-        ],
-      ],
-    },
+  const response = await fetch(webhookUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    redirect: "follow",
+    body: JSON.stringify({
+      timestamp: new Date().toISOString(),
+      event: row.event,
+      leadId: row.leadId,
+      name: row.name,
+      email: row.email,
+      phone: row.phone,
+      amount: row.amount ?? "",
+      utmSource: row.utmSource ?? "",
+      utmMedium: row.utmMedium ?? "",
+      utmCampaign: row.utmCampaign ?? "",
+      utmTerm: row.utmTerm ?? "",
+      utmContent: row.utmContent ?? "",
+      referrer: row.referrer ?? "",
+      landingUrl: row.landingUrl ?? "",
+      stripeSessionId: row.stripeSessionId ?? "",
+      stripePaymentIntent: row.stripePaymentIntent ?? "",
+    }),
   })
+
+  if (!response.ok) {
+    throw new Error(`Apps Script respondeu ${response.status}: ${await response.text()}`)
+  }
 }

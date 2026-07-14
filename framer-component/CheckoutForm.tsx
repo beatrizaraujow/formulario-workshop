@@ -39,15 +39,19 @@ function createLeadId(): string {
 }
 
 // Primeiro toque: guarda a origem (UTMs) no localStorage e reaproveita
-// enquanto o visitante não chegar por um link com novos UTMs.
-function readAttribution(): Attribution {
+// enquanto o visitante não chegar por um link com novos UTMs. "isNew"
+// indica se é um toque novo (pra só contar 1 visita por pessoa/campanha,
+// não uma a cada F5).
+function readAttribution(): { attribution: Attribution; isNew: boolean } {
     const params = new URLSearchParams(window.location.search)
     const hasNewUtm = UTM_KEYS.some((key) => params.get(key))
 
     if (!hasNewUtm) {
         try {
             const stored = window.localStorage.getItem(ATTRIBUTION_STORAGE_KEY)
-            if (stored) return JSON.parse(stored) as Attribution
+            if (stored) {
+                return { attribution: JSON.parse(stored) as Attribution, isNew: false }
+            }
         } catch {
             // localStorage indisponível (ex: preview no editor do Framer)
         }
@@ -70,7 +74,7 @@ function readAttribution(): Attribution {
         // segue sem cache se não puder gravar
     }
 
-    return attribution
+    return { attribution, isNew: true }
 }
 
 const formatPhone = (value: string): string => {
@@ -99,8 +103,30 @@ export default function CheckoutForm() {
     useEffect(() => {
         // Lê URL/localStorage (indisponíveis durante SSR do site publicado no
         // Framer), por isso precisa ser em efeito e não em estado inicial.
+        const { attribution: attr, isNew } = readAttribution()
         // eslint-disable-next-line react-hooks/set-state-in-effect
-        setAttribution(readAttribution())
+        setAttribution(attr)
+
+        if (!isNew || API_BASE_URL.includes("SEU-PROJETO")) return
+
+        // Registra a visita (quem chegou e por onde) em segundo plano.
+        // Só dispara no primeiro toque — um F5 na mesma sessão não conta de novo.
+        fetch(`${API_BASE_URL}/api/visit`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                leadId: attr.leadId,
+                utmSource: attr.utmSource,
+                utmMedium: attr.utmMedium,
+                utmCampaign: attr.utmCampaign,
+                utmTerm: attr.utmTerm,
+                utmContent: attr.utmContent,
+                referrer: attr.referrer,
+                landingUrl: attr.landingUrl,
+            }),
+        }).catch((error) => {
+            console.error("Falha ao registrar visita:", error)
+        })
     }, [])
 
     const handleChange =
