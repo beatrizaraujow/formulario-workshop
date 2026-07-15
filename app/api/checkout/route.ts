@@ -5,7 +5,6 @@ import {
   getStripe,
   WORKSHOP_AMOUNT,
   WORKSHOP_CURRENCY,
-  WORKSHOP_PAYMENT_METHODS,
   WORKSHOP_PRODUCT_NAME,
 } from "@/lib/stripe"
 import type Stripe from "stripe"
@@ -37,10 +36,11 @@ export async function POST(request: Request) {
     return jsonResponse(request, { ok: false, error: "Requisição inválida." }, { status: 400 })
   }
 
+  // No modo embedded não existe cancel_url: o Checkout roda dentro da página e só
+  // usa return_url, pra onde o cliente vai depois de concluir o pagamento.
   const successUrl = process.env.STRIPE_SUCCESS_URL
-  const cancelUrl = process.env.STRIPE_CANCEL_URL
-  if (!successUrl || !cancelUrl) {
-    console.error("STRIPE_SUCCESS_URL / STRIPE_CANCEL_URL não configurados.")
+  if (!successUrl) {
+    console.error("STRIPE_SUCCESS_URL não configurado.")
     return jsonResponse(
       request,
       { ok: false, error: "Checkout não configurado. Tente novamente mais tarde." },
@@ -77,16 +77,18 @@ export async function POST(request: Request) {
     const stripe = getStripe()
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
-      // Definido por STRIPE_PAYMENT_METHODS (padrão "card"). Pix só depois de liberado na conta Stripe.
-      payment_method_types: WORKSHOP_PAYMENT_METHODS,
+      // Renderiza o pagamento dentro da própria página, sem redirecionar pro Stripe.
+      ui_mode: "embedded_page",
+      // payment_method_types é omitido de propósito: assim o Checkout usa os métodos
+      // habilitados no Dashboard da Stripe. Quando o Pix for aprovado na conta, ele
+      // passa a aparecer sozinho — sem mexer no código e sem redeploy.
       customer_email: data.email,
       line_items: lineItems,
       metadata,
-      success_url: `${successUrl}${successUrl.includes("?") ? "&" : "?"}session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: cancelUrl,
+      return_url: `${successUrl}${successUrl.includes("?") ? "&" : "?"}session_id={CHECKOUT_SESSION_ID}`,
     })
 
-    return jsonResponse(request, { ok: true, url: session.url })
+    return jsonResponse(request, { ok: true, clientSecret: session.client_secret })
   } catch (error) {
     console.error("Falha ao criar sessão de checkout no Stripe:", error)
     return jsonResponse(

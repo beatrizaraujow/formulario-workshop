@@ -10,7 +10,13 @@
  * O: Stripe Session ID | P: Stripe Payment Intent
  */
 export type SheetRow = {
-  event: "visita_pagina" | "lead_criado" | "pagamento_aprovado"
+  event:
+    | "visita_pagina"
+    | "lead_criado"
+    // Pix é assíncrono: fica "pendente" enquanto o cliente não compensa o QR Code.
+    | "pagamento_pendente"
+    | "pagamento_aprovado"
+    | "pagamento_falhou"
   leadId: string
   name: string
   email: string

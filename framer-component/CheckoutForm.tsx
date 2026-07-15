@@ -5,11 +5,20 @@
 // publicado no Vercel. Depois do deploy, troque API_BASE_URL abaixo pela
 // URL do seu projeto no Vercel.
 // ══════════════════════════════════════════════════════════════════════
-import React, { useEffect, useState } from "react"
+import React, { useEffect, useRef, useState } from "react"
+import { loadStripe, type StripeEmbeddedCheckout } from "@stripe/stripe-js"
 
-// TROQUE pela URL do projeto depois do "vercel --prod"
-// (ex: "https://formulario-workshop-api.vercel.app")
-const API_BASE_URL = "https://SEU-PROJETO.vercel.app"
+// URL do backend no Vercel. Se trocar de projeto, mude aqui e republique o site.
+const API_BASE_URL = "https://formulario-workshop.vercel.app"
+
+// Chave PUBLICÁVEL (pk_). É pública por design — pode viver no componente, que roda
+// no navegador do visitante. NUNCA coloque aqui a chave secreta (sk_) nem a do
+// webhook (whsec_). Ao ir pra produção, troque por pk_live_... e republique.
+const STRIPE_PUBLISHABLE_KEY =
+    "pk_test_51TrfmfFBqnhDILMZZXlX5ZoU4aWLYuMNXmnhQVSjAUA4Z9gqtHikQQYO5DKvaUli7nebC5z7MOO4WIdYWVROv1FL00HQ29rrJu"
+
+// Fora do componente de propósito: carrega o Stripe.js uma vez só, não a cada render.
+const stripePromise = loadStripe(STRIPE_PUBLISHABLE_KEY)
 
 interface FormData {
     name: string
@@ -97,8 +106,14 @@ export default function CheckoutForm() {
     const [errors, setErrors] = useState<Partial<FormData>>({})
     const [attribution, setAttribution] = useState<Attribution | null>(null)
     const [honeypot, setHoneypot] = useState("")
-    const [isRedirecting, setIsRedirecting] = useState(false)
+    const [isCheckoutReady, setIsCheckoutReady] = useState(false)
     const [paymentError, setPaymentError] = useState<string | null>(null)
+    // Incrementado pelo botão "Tentar novamente": muda a dependência do efeito e
+    // força uma nova tentativa de montar o checkout.
+    const [retryKey, setRetryKey] = useState(0)
+    // Onde a Stripe injeta o formulário, e a instância viva (pra destruir depois).
+    const checkoutRef = useRef<HTMLDivElement | null>(null)
+    const embeddedRef = useRef<StripeEmbeddedCheckout | null>(null)
 
     useEffect(() => {
         // Lê URL/localStorage (indisponíveis durante SSR do site publicado no
@@ -182,53 +197,83 @@ export default function CheckoutForm() {
         })
     }
 
-    const handlePayment = async () => {
-        if (!attribution || isRedirecting) return
+    // Monta o Checkout da Stripe dentro da caixa da etapa 2: o pagamento acontece
+    // aqui mesmo, sem mandar o visitante pro site do Stripe. Depois de concluído, a
+    // própria Stripe redireciona pro return_url definido no backend.
+    useEffect(() => {
+        if (step !== 2 || !attribution) return
 
-        if (API_BASE_URL.includes("SEU-PROJETO")) {
-            setPaymentError(
-                "API_BASE_URL ainda não foi configurada neste componente."
-            )
-            return
-        }
+        let cancelled = false
 
-        setPaymentError(null)
-        setIsRedirecting(true)
+        const mountCheckout = async () => {
+            try {
+                const stripe = await stripePromise
+                if (!stripe) throw new Error("Stripe.js não carregou")
 
-        try {
-            const response = await fetch(`${API_BASE_URL}/api/checkout`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    leadId: attribution.leadId,
-                    name: data.name,
-                    email: data.email,
-                    phone: data.phone,
-                    utmSource: attribution.utmSource,
-                    utmMedium: attribution.utmMedium,
-                    utmCampaign: attribution.utmCampaign,
-                    utmTerm: attribution.utmTerm,
-                    utmContent: attribution.utmContent,
-                    referrer: attribution.referrer,
-                    landingUrl: attribution.landingUrl,
-                    honeypot,
-                }),
-            })
+                const checkout = await stripe.createEmbeddedCheckoutPage({
+                    // A Stripe chama isto pra obter a sessão criada pelo nosso backend.
+                    fetchClientSecret: async () => {
+                        const response = await fetch(
+                            `${API_BASE_URL}/api/checkout`,
+                            {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({
+                                    leadId: attribution.leadId,
+                                    name: data.name,
+                                    email: data.email,
+                                    phone: data.phone,
+                                    utmSource: attribution.utmSource,
+                                    utmMedium: attribution.utmMedium,
+                                    utmCampaign: attribution.utmCampaign,
+                                    utmTerm: attribution.utmTerm,
+                                    utmContent: attribution.utmContent,
+                                    referrer: attribution.referrer,
+                                    landingUrl: attribution.landingUrl,
+                                    honeypot,
+                                }),
+                            }
+                        )
 
-            const result = await response.json()
-            if (!response.ok || !result.url) {
-                throw new Error(result.error ?? "Erro ao iniciar pagamento")
+                        const result = await response.json()
+                        if (!response.ok || !result.clientSecret) {
+                            throw new Error(
+                                result.error ?? "Erro ao iniciar pagamento"
+                            )
+                        }
+                        return result.clientSecret as string
+                    },
+                })
+
+                // Se o visitante voltou pra etapa 1 enquanto carregava, descarta.
+                if (cancelled || !checkoutRef.current) {
+                    checkout.destroy()
+                    return
+                }
+
+                embeddedRef.current = checkout
+                checkout.mount(checkoutRef.current)
+                setIsCheckoutReady(true)
+            } catch (error) {
+                console.error("Falha ao montar o checkout:", error)
+                if (!cancelled) {
+                    setPaymentError(
+                        "Não foi possível abrir o pagamento agora. Tente novamente em instantes."
+                    )
+                }
             }
-
-            window.location.href = result.url
-        } catch (error) {
-            console.error("Falha ao iniciar checkout:", error)
-            setPaymentError(
-                "Não foi possível abrir o pagamento agora. Tente novamente em instantes."
-            )
-            setIsRedirecting(false)
         }
-    }
+
+        mountCheckout()
+
+        // Sem isto, voltar pra etapa 1 e avançar de novo deixaria um checkout órfão.
+        return () => {
+            cancelled = true
+            embeddedRef.current?.destroy()
+            embeddedRef.current = null
+            setIsCheckoutReady(false)
+        }
+    }, [step, attribution, data, honeypot, retryKey])
 
     const progress = step === 1 ? 50 : 100
 
@@ -784,7 +829,7 @@ export default function CheckoutForm() {
                             <h3 className="cf-form-title">
                                 {step === 1 ? "Inscrição" : "Pagamento"}
                             </h3>
-                            <p className="cf-price">R$97,00 · Pix ou cartão</p>
+                            <p className="cf-price">R$97,00 · cartão de crédito</p>
                         </div>
 
                         <div className="cf-steps">
@@ -942,35 +987,36 @@ export default function CheckoutForm() {
                                     </div>
                                 </div>
 
-                                <div className="cf-checkout-box">
-                                    Pagamento seguro via Stripe (Pix ou
-                                    cartão).
-                                    <br />
-                                    Você será redirecionado para concluir o
-                                    pagamento. A vaga é confirmada após o
-                                    pagamento aprovado.
-                                </div>
-
-                                {paymentError && (
-                                    <p className="cf-error-msg">
-                                        {paymentError}
-                                    </p>
+                                {paymentError ? (
+                                    <div>
+                                        <p className="cf-error-msg">
+                                            {paymentError}
+                                        </p>
+                                        <button
+                                            className="cf-btn"
+                                            onClick={() => {
+                                                setPaymentError(null)
+                                                setRetryKey((key) => key + 1)
+                                            }}
+                                        >
+                                            Tentar novamente
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <>
+                                        {!isCheckoutReady && (
+                                            <div className="cf-checkout-box">
+                                                Carregando pagamento seguro…
+                                            </div>
+                                        )}
+                                        {/* A Stripe injeta o formulário de pagamento aqui dentro */}
+                                        <div ref={checkoutRef} />
+                                    </>
                                 )}
-
-                                <button
-                                    className="cf-btn"
-                                    onClick={handlePayment}
-                                    disabled={isRedirecting}
-                                >
-                                    {isRedirecting
-                                        ? "Redirecionando..."
-                                        : "Ir para o pagamento"}
-                                </button>
 
                                 <button
                                     className="cf-btn-back"
                                     onClick={() => setStep(1)}
-                                    disabled={isRedirecting}
                                 >
                                     ← Voltar e editar dados
                                 </button>
