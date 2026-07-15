@@ -5,6 +5,7 @@ import {
   getStripe,
   WORKSHOP_AMOUNT,
   WORKSHOP_CURRENCY,
+  WORKSHOP_PAYMENT_METHODS,
   WORKSHOP_PRODUCT_NAME,
 } from "@/lib/stripe"
 import type Stripe from "stripe"
@@ -76,8 +77,8 @@ export async function POST(request: Request) {
     const stripe = getStripe()
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
-      // "pix" só aparece se estiver habilitado em Configurações > Métodos de pagamento no Dashboard da Stripe.
-      payment_method_types: ["card", "pix"],
+      // Definido por STRIPE_PAYMENT_METHODS (padrão "card"). Pix só depois de liberado na conta Stripe.
+      payment_method_types: WORKSHOP_PAYMENT_METHODS,
       customer_email: data.email,
       line_items: lineItems,
       metadata,
