@@ -84,6 +84,7 @@ export async function POST(request: Request) {
       // passa a aparecer sozinho — sem mexer no código e sem redeploy.
       customer_email: data.email,
       line_items: lineItems,
+      allow_promotion_codes: true,
       metadata,
       return_url: `${successUrl}${successUrl.includes("?") ? "&" : "?"}session_id={CHECKOUT_SESSION_ID}`,
     })
