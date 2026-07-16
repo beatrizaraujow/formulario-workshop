@@ -13,6 +13,7 @@ export type SheetRow = {
   event:
     | "visita_pagina"
     | "lead_criado"
+    | "checkout_iniciado"
     // Pix é assíncrono: fica "pendente" enquanto o cliente não compensa o QR Code.
     | "pagamento_pendente"
     | "pagamento_aprovado"
