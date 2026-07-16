@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { appendSheetRow } from "@/lib/sheets"
 import { contactSchema } from "@/lib/validation"
 import { handlePreflight, jsonResponse } from "@/lib/cors"
 import {
@@ -88,6 +89,21 @@ export async function POST(request: Request) {
       metadata,
       return_url: `${successUrl}${successUrl.includes("?") ? "&" : "?"}session_id={CHECKOUT_SESSION_ID}`,
     })
+    appendSheetRow({
+      event: "checkout_iniciado",
+      leadId: data.leadId,
+      name: data.name,
+      email: data.email,
+      phone: data.phone,
+      utmSource: data.utmSource,
+      utmMedium: data.utmMedium,
+      utmCampaign: data.utmCampaign,
+      utmTerm: data.utmTerm,
+      utmContent: data.utmContent,
+      referrer: data.referrer,
+      landingUrl: data.landingUrl,
+      stripeSessionId: session.id,
+    }).catch((err) => console.error("Falha ao gravar checkout_iniciado:", err))
 
     return jsonResponse(request, { ok: true, clientSecret: session.client_secret })
   } catch (error) {
