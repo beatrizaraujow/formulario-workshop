@@ -22,96 +22,106 @@ export async function POST(request: Request) {
     return jsonResponse(request, { ok: false, error: "JSON inválido." }, { status: 400 })
   }
 
-  const parsed = contactSchema.safeParse(body)
+const parsed = contactSchema.safeParse(body)
   if (!parsed.success) {
     return jsonResponse(
       request,
       { ok: false, error: "Dados inválidos.", issues: z.flattenError(parsed.error) },
       { status: 400 }
-    )
+      )
   }
 
-  const data = parsed.data
+const data = parsed.data
 
-  if (data.honeypot) {
-    return jsonResponse(request, { ok: false, error: "Requisição inválida." }, { status: 400 })
-  }
+if (data.honeypot) {
+  return jsonResponse(request, { ok: false, error: "Requisição inválida." }, { status: 400 })
+}
 
-  // No modo embedded não existe cancel_url: o Checkout roda dentro da página e só
-  // usa return_url, pra onde o cliente vai depois de concluir o pagamento.
-  const successUrl = process.env.STRIPE_SUCCESS_URL
+// Checkout hospedado: o cliente é redirecionado pro domínio do Stripe pra pagar e
+// volta pro success_url/cancel_url depois. Evita depender do Stripe.js rodando
+// dentro da página (o que falha em navegadores internos de app, tipo o do
+// Instagram/Facebook, quando o link do anúncio abre nesse webview).
+const successUrl = process.env.STRIPE_SUCCESS_URL
   if (!successUrl) {
     console.error("STRIPE_SUCCESS_URL não configurado.")
     return jsonResponse(
       request,
       { ok: false, error: "Checkout não configurado. Tente novamente mais tarde." },
       { status: 500 }
-    )
+      )
   }
 
-  const metadata = {
-    leadId: data.leadId,
-    name: data.name,
-    phone: data.phone,
-    utmSource: data.utmSource ?? "",
-    utmMedium: data.utmMedium ?? "",
-    utmCampaign: data.utmCampaign ?? "",
-    utmTerm: data.utmTerm ?? "",
-    utmContent: data.utmContent ?? "",
-  }
+const cancelUrl = process.env.STRIPE_CANCEL_URL || data.landingUrl || successUrl
 
-  const priceId = process.env.STRIPE_PRICE_ID
+const metadata = {
+  leadId: data.leadId,
+  name: data.name,
+  phone: data.phone,
+  utmSource: data.utmSource ?? "",
+  utmMedium: data.utmMedium ?? "",
+  utmCampaign: data.utmCampaign ?? "",
+  utmTerm: data.utmTerm ?? "",
+  utmContent: data.utmContent ?? "",
+}
+
+const priceId = process.env.STRIPE_PRICE_ID
   const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = priceId
-    ? [{ price: priceId, quantity: 1 }]
+  ? [{ price: priceId, quantity: 1 }]
     : [
-        {
-          quantity: 1,
-          price_data: {
-            currency: WORKSHOP_CURRENCY,
-            unit_amount: WORKSHOP_AMOUNT,
-            product_data: { name: WORKSHOP_PRODUCT_NAME },
-          },
+      {
+        quantity: 1,
+        price_data: {
+          currency: WORKSHOP_CURRENCY,
+          unit_amount: WORKSHOP_AMOUNT,
+          product_data: { name: WORKSHOP_PRODUCT_NAME },
         },
+      },
       ]
 
-  try {
-    const stripe = getStripe()
-    const session = await stripe.checkout.sessions.create({
-      mode: "payment",
-      // Renderiza o pagamento dentro da própria página, sem redirecionar pro Stripe.
-      ui_mode: "embedded_page",
-      // payment_method_types é omitido de propósito: assim o Checkout usa os métodos
-      // habilitados no Dashboard da Stripe. Quando o Pix for aprovado na conta, ele
-      // passa a aparecer sozinho — sem mexer no código e sem redeploy.
-      customer_email: data.email,
-      line_items: lineItems,
-      allow_promotion_codes: true,
-      metadata,
-      return_url: `${successUrl}${successUrl.includes("?") ? "&" : "?"}session_id={CHECKOUT_SESSION_ID}`,
-    })
-    appendSheetRow({
-      event: "checkout_iniciado",
-      leadId: data.leadId,
-      name: data.name,
-      email: data.email,
-      phone: data.phone,
-      utmSource: data.utmSource,
-      utmMedium: data.utmMedium,
-      utmCampaign: data.utmCampaign,
-      utmTerm: data.utmTerm,
-      utmContent: data.utmContent,
-      referrer: data.referrer,
-      landingUrl: data.landingUrl,
-      stripeSessionId: session.id,
-    }).catch((err) => console.error("Falha ao gravar checkout_iniciado:", err))
+try {
+  const stripe = getStripe()
+  const session = await stripe.checkout.sessions.create({
+    mode: "payment",
+    // Hospedado no domínio do Stripe: mais compatível com navegadores internos de
+    // apps (Instagram/Facebook) do que o checkout incorporado na própria página.
+    ui_mode: "hosted",
+    // payment_method_types é omitido de propósito: assim o Checkout usa os métodos
+    // habilitados no Dashboard da Stripe. Quando o Pix for aprovado na conta, ele
+    // passa a aparecer sozinho — sem mexer no código e sem redeploy.
+    customer_email: data.email,
+    line_items: lineItems,
+    allow_promotion_codes: true,
+    metadata,
+    success_url: `${successUrl}${successUrl.includes("?") ? "&" : "?"}session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: cancelUrl,
+  })
 
-    return jsonResponse(request, { ok: true, clientSecret: session.client_secret })
-  } catch (error) {
-    console.error("Falha ao criar sessão de checkout no Stripe:", error)
-    return jsonResponse(
-      request,
-      { ok: false, error: "Não foi possível iniciar o pagamento. Tente novamente." },
-      { status: 502 }
+  // Aguarda a gravação terminar antes de responder: em ambiente serverless, uma
+  // Promise não aguardada pode ser abortada assim que a resposta é enviada, e a
+  // linha nunca chega a ser gravada na planilha.
+  await appendSheetRow({
+    event: "checkout_iniciado",
+    leadId: data.leadId,
+    name: data.name,
+    email: data.email,
+    phone: data.phone,
+    utmSource: data.utmSource,
+    utmMedium: data.utmMedium,
+    utmCampaign: data.utmCampaign,
+    utmTerm: data.utmTerm,
+    utmContent: data.utmContent,
+    referrer: data.referrer,
+    landingUrl: data.landingUrl,
+    stripeSessionId: session.id,
+  }).catch((err) => console.error("Falha ao gravar checkout_iniciado:", err))
+
+  return jsonResponse(request, { ok: true, url: session.url })
+} catch (error) {
+  console.error("Falha ao criar sessão de checkout no Stripe:", error)
+  return jsonResponse(
+    request,
+    { ok: false, error: "Não foi possível iniciar o pagamento. Tente novamente." },
+    { status: 502 }
     )
-  }
+}
 }
