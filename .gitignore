@@ -34,6 +34,10 @@ yarn-error.log*
 .env*
 !.env.example
 
+# MCP: contém o Personal Access Token do Supabase em texto plano.
+# O .example é versionado; o real, nunca.
+.mcp.json
+
 # vercel
 .vercel
 

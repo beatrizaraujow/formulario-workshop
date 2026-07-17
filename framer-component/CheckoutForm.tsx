@@ -13,9 +13,15 @@ const API_BASE_URL = "https://formulario-workshop.vercel.app"
 
 // Chave PUBLICÁVEL (pk_). É pública por design — pode viver no componente, que roda
 // no navegador do visitante. NUNCA coloque aqui a chave secreta (sk_) nem a do
-// webhook (whsec_). Ao ir pra produção, troque por pk_live_... e republique.
+// webhook (whsec_).
+//
+// Está em modo LIVE, igual ao backend (que cria sessões cs_live_). Os dois PRECISAM
+// estar no mesmo modo: a Stripe isola teste e produção, e o Stripe.js recusa uma
+// sessão live vinda de chave de teste — o pagamento nem chega a abrir, o visitante
+// só vê "Não foi possível abrir o pagamento agora". Se um dia voltar pra teste,
+// troque a pk_ daqui e a sk_ do backend JUNTAS, nunca uma só.
 const STRIPE_PUBLISHABLE_KEY =
-    "pk_test_51TrfmfFBqnhDILMZZXlX5ZoU4aWLYuMNXmnhQVSjAUA4Z9gqtHikQQYO5DKvaUli7nebC5z7MOO4WIdYWVROv1FL00HQ29rrJu"
+    "pk_live_51TrfmfFBqnhDILMZytL4J32K1sD13V97D8wIVnbpFMwXgPmbohgfXT6PvsLvYQFUa61WviDkYG9NgwKlK7XAxFZJ00Ew0F1tZg"
 
 // Fora do componente de propósito: carrega o Stripe.js uma vez só, não a cada render.
 const stripePromise = loadStripe(STRIPE_PUBLISHABLE_KEY)
@@ -33,18 +39,54 @@ interface Attribution {
     utmCampaign: string
     utmTerm: string
     utmContent: string
+    // Sempre string. Nunca Number()/parseInt(): utm_id tem 18 dígitos e como
+    // number o JavaScript o arredonda em silêncio, virando outro id.
+    utmId: string
+    fbclid: string
     referrer: string
     landingUrl: string
 }
 
 const ATTRIBUTION_STORAGE_KEY = "cf_attribution"
-const UTM_KEYS = ["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content"]
+// utm_id e fbclid entram aqui junto com os UTMs: um anúncio da Meta pode mandar
+// só fbclid, e sem isso esse clique seria tratado como "sem toque novo" e
+// herdaria a atribuição antiga do localStorage.
+const UTM_KEYS = [
+    "utm_source",
+    "utm_medium",
+    "utm_campaign",
+    "utm_term",
+    "utm_content",
+    "utm_id",
+    "fbclid",
+]
 
 function createLeadId(): string {
     if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
         return crypto.randomUUID()
     }
     return `lead_${Date.now()}_${Math.random().toString(16).slice(2)}`
+}
+
+// Todo campo de atribuição vira string, sempre — inclusive utm_id, que parece
+// número mas é identificador.
+const asText = (value: unknown): string =>
+    typeof value === "string" ? value : ""
+
+function normalize(stored: unknown): Attribution {
+    const raw = (stored ?? {}) as Record<string, unknown>
+    return {
+        leadId: asText(raw.leadId) || createLeadId(),
+        utmSource: asText(raw.utmSource),
+        utmMedium: asText(raw.utmMedium),
+        utmCampaign: asText(raw.utmCampaign),
+        utmTerm: asText(raw.utmTerm),
+        utmContent: asText(raw.utmContent),
+        utmId: asText(raw.utmId),
+        fbclid: asText(raw.fbclid),
+        referrer: asText(raw.referrer),
+        landingUrl: asText(raw.landingUrl),
+    }
 }
 
 // Primeiro toque: guarda a origem (UTMs) no localStorage e reaproveita
@@ -59,7 +101,13 @@ function readAttribution(): { attribution: Attribution; isNew: boolean } {
         try {
             const stored = window.localStorage.getItem(ATTRIBUTION_STORAGE_KEY)
             if (stored) {
-                return { attribution: JSON.parse(stored) as Attribution, isNew: false }
+                return {
+                    // JSON.parse não valida nada, e o que está gravado pode ter
+                    // sido escrito por uma versão anterior do componente (sem
+                    // utmId/fbclid). Normaliza pra não mandar undefined à API.
+                    attribution: normalize(JSON.parse(stored)),
+                    isNew: false,
+                }
             }
         } catch {
             // localStorage indisponível (ex: preview no editor do Framer)
@@ -73,6 +121,9 @@ function readAttribution(): { attribution: Attribution; isNew: boolean } {
         utmCampaign: params.get("utm_campaign") ?? "",
         utmTerm: params.get("utm_term") ?? "",
         utmContent: params.get("utm_content") ?? "",
+        // params.get() já devolve string: o valor entra e sai como texto puro.
+        utmId: params.get("utm_id") ?? "",
+        fbclid: params.get("fbclid") ?? "",
         referrer: document.referrer ?? "",
         landingUrl: window.location.href,
     }
@@ -136,6 +187,8 @@ export default function CheckoutForm() {
                 utmCampaign: attr.utmCampaign,
                 utmTerm: attr.utmTerm,
                 utmContent: attr.utmContent,
+                utmId: attr.utmId,
+                fbclid: attr.fbclid,
                 referrer: attr.referrer,
                 landingUrl: attr.landingUrl,
             }),
@@ -188,6 +241,8 @@ export default function CheckoutForm() {
                 utmCampaign: attribution.utmCampaign,
                 utmTerm: attribution.utmTerm,
                 utmContent: attribution.utmContent,
+                utmId: attribution.utmId,
+                fbclid: attribution.fbclid,
                 referrer: attribution.referrer,
                 landingUrl: attribution.landingUrl,
                 honeypot,
@@ -228,6 +283,8 @@ export default function CheckoutForm() {
                                     utmCampaign: attribution.utmCampaign,
                                     utmTerm: attribution.utmTerm,
                                     utmContent: attribution.utmContent,
+                                    utmId: attribution.utmId,
+                                    fbclid: attribution.fbclid,
                                     referrer: attribution.referrer,
                                     landingUrl: attribution.landingUrl,
                                     honeypot,
@@ -376,6 +433,46 @@ export default function CheckoutForm() {
           margin: 0 0 20px 0;
         }
 
+        /* ── Como funciona (passo a passo) ── */
+        .cf-how-title {
+          font-size: 16px;
+          font-weight: bold;
+          color: #c9a84c;
+          margin: 0 0 14px 0;
+        }
+
+        /* Nomes cf-step-* não colidem com .cf-step-label/.cf-step-pct, que são
+           da barra de progresso "Etapa 1 de 2" no painel branco. */
+        .cf-step-row {
+          display: flex;
+          align-items: flex-start;
+          gap: 14px;
+          margin-bottom: 14px;
+        }
+
+        .cf-step-num {
+          flex-shrink: 0;
+          width: 24px;
+          height: 24px;
+          border-radius: 50%;
+          background-color: #1a1a1a;
+          border: 1px solid #c9a84c;
+          color: #c9a84c;
+          font-size: 13px;
+          font-weight: bold;
+          line-height: 1;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+
+        .cf-step-copy {
+          font-size: 15.5px;
+          color: #b8b8b8;
+          line-height: 1.55;
+          margin: 0;
+        }
+
         /* ── Selo de garantia ── */
         .cf-badge {
           display: flex;
@@ -517,6 +614,10 @@ export default function CheckoutForm() {
         }
 
         /* Botões */
+        /* Mesmo verde do preço e da barra de progresso (#2e9e5b), pra não criar
+           um terceiro tom no componente. O texto segue escuro de propósito: sobre
+           esse verde ele tem contraste 5.1:1 (passa no WCAG AA), enquanto texto
+           branco daria só 3.4:1 e reprovaria neste tamanho de fonte. */
         .cf-btn {
           width: 100%;
           padding: 16px;
@@ -524,7 +625,7 @@ export default function CheckoutForm() {
           font-weight: bold;
           font-family: inherit;
           color: #1a1a1a;
-          background-color: #c9a84c;
+          background-color: #2e9e5b;
           border: none;
           border-radius: 10px;
           cursor: pointer;
@@ -534,7 +635,7 @@ export default function CheckoutForm() {
         }
 
         .cf-btn:hover {
-          background-color: #d9b95e;
+          background-color: #35b268;
         }
 
         .cf-btn:active {
@@ -607,6 +708,20 @@ export default function CheckoutForm() {
           margin-bottom: 8px;
         }
 
+        /* Caixa onde a Stripe injeta o iframe do pagamento. O iframe se
+           dimensiona sozinho; aqui só garantimos que ele nunca estoure a
+           largura do cartão no mobile. */
+        .cf-checkout-mount {
+          width: 100%;
+          max-width: 100%;
+          overflow-x: hidden;
+        }
+
+        .cf-checkout-mount iframe {
+          width: 100% !important;
+          max-width: 100% !important;
+        }
+
         /* ══════════ Responsivo — pela largura do COMPONENTE (Framer) ══════════ */
         @container (max-width: 700px) {
           .cf-wrapper {
@@ -651,6 +766,26 @@ export default function CheckoutForm() {
           .cf-why-text {
             font-size: 14.5px;
             margin-bottom: 16px;
+          }
+
+          .cf-how-title {
+            font-size: 15px;
+            margin-bottom: 12px;
+          }
+
+          .cf-step-row {
+            gap: 12px;
+            margin-bottom: 12px;
+          }
+
+          .cf-step-num {
+            width: 22px;
+            height: 22px;
+            font-size: 12px;
+          }
+
+          .cf-step-copy {
+            font-size: 14.5px;
           }
 
           .cf-badge {
@@ -729,6 +864,26 @@ export default function CheckoutForm() {
             margin-bottom: 16px;
           }
 
+          .cf-how-title {
+            font-size: 15px;
+            margin-bottom: 12px;
+          }
+
+          .cf-step-row {
+            gap: 12px;
+            margin-bottom: 12px;
+          }
+
+          .cf-step-num {
+            width: 22px;
+            height: 22px;
+            font-size: 12px;
+          }
+
+          .cf-step-copy {
+            font-size: 14.5px;
+          }
+
           .cf-badge {
             gap: 12px;
             padding: 13px 16px;
@@ -786,6 +941,28 @@ export default function CheckoutForm() {
                             <span className="cf-check-mark">✓</span>
                             <p className="cf-check-text">
                                 Diagnóstico do seu negócio
+                            </p>
+                        </div>
+
+                        <div className="cf-divider" />
+
+                        <p className="cf-how-title">Como funciona?</p>
+
+                        <div className="cf-step-row">
+                            <span className="cf-step-num">1</span>
+                            <p className="cf-step-copy">Faça sua inscrição.</p>
+                        </div>
+                        <div className="cf-step-row">
+                            <span className="cf-step-num">2</span>
+                            <p className="cf-step-copy">
+                                Após a confirmação do pagamento, nossa equipe
+                                libera as datas disponíveis.
+                            </p>
+                        </div>
+                        <div className="cf-step-row">
+                            <span className="cf-step-num">3</span>
+                            <p className="cf-step-copy">
+                                Você escolhe o melhor horário para participar.
                             </p>
                         </div>
 
@@ -1010,7 +1187,10 @@ export default function CheckoutForm() {
                                             </div>
                                         )}
                                         {/* A Stripe injeta o formulário de pagamento aqui dentro */}
-                                        <div ref={checkoutRef} />
+                                        <div
+                                            className="cf-checkout-mount"
+                                            ref={checkoutRef}
+                                        />
                                     </>
                                 )}
 

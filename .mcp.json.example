@@ -1,0 +1,33 @@
+{
+  "_comentario": [
+    "Modelo de configuração do MCP do Supabase para o Claude Code.",
+    "COPIE este arquivo para .mcp.json (sem o .example) e troque os dois valores",
+    "abaixo. O .mcp.json real está no .gitignore e nunca deve ser commitado:",
+    "o SUPABASE_ACCESS_TOKEN dá acesso administrativo à sua conta Supabase.",
+    "",
+    "SUPABASE_ACCESS_TOKEN: Dashboard > avatar > Account Preferences >",
+    "                       Access Tokens > Generate new token (começa com sbp_).",
+    "--project-ref:         o pedaço da URL em",
+    "                       supabase.com/dashboard/project/<PROJECT_REF>",
+    "",
+    "Para um MCP que só lê o banco (mais seguro, mas não aplica migrations),",
+    "acrescente \"--read-only\" na lista de args.",
+    "",
+    "Depois de criar o .mcp.json, reinicie o Claude Code: ele lê esse arquivo",
+    "só na abertura da sessão, e vai pedir sua aprovação na primeira vez."
+  ],
+  "mcpServers": {
+    "supabase": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@supabase/mcp-server-supabase@latest",
+        "--project-ref=SEU_PROJECT_REF"
+      ],
+      "env": {
+        "SUPABASE_ACCESS_TOKEN": "sbp_SEU_TOKEN_AQUI"
+      }
+    }
+  }
+}

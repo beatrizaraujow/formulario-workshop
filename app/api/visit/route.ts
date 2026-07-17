@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { appendSheetRow } from "@/lib/sheets"
+import { saveVisit } from "@/lib/store"
 import { visitSchema } from "@/lib/validation"
 import { handlePreflight, jsonResponse } from "@/lib/cors"
 
@@ -30,24 +30,19 @@ export async function POST(request: Request) {
     return jsonResponse(request, { ok: true })
   }
 
-  try {
-    await appendSheetRow({
-      event: "visita_pagina",
-      leadId: data.leadId,
-      name: "",
-      email: "",
-      phone: "",
-      utmSource: data.utmSource,
-      utmMedium: data.utmMedium,
-      utmCampaign: data.utmCampaign,
-      utmTerm: data.utmTerm,
-      utmContent: data.utmContent,
-      referrer: data.referrer,
-      landingUrl: data.landingUrl,
-    })
-  } catch (error) {
-    console.error("Falha ao gravar visita na planilha:", error)
-  }
+  // saveVisit não lança: uma falha de registro vira log e não atrapalha a visita.
+  await saveVisit({
+    leadId: data.leadId,
+    utmSource: data.utmSource,
+    utmMedium: data.utmMedium,
+    utmCampaign: data.utmCampaign,
+    utmTerm: data.utmTerm,
+    utmContent: data.utmContent,
+    utmId: data.utmId,
+    fbclid: data.fbclid,
+    referrer: data.referrer,
+    landingUrl: data.landingUrl,
+  })
 
   return jsonResponse(request, { ok: true })
 }

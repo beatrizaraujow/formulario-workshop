@@ -7,7 +7,10 @@
  * A: Timestamp | B: Evento | C: Lead ID | D: Nome | E: Email | F: Telefone
  * G: Valor (R$) | H: UTM Source | I: UTM Medium | J: UTM Campaign
  * K: UTM Term | L: UTM Content | M: Referrer | N: Landing Page
- * O: Stripe Session ID | P: Stripe Payment Intent
+ * O: Stripe Session ID | P: Stripe Payment Intent | Q: UTM ID | R: fbclid
+ *
+ * Q e R entraram no fim de propósito: coluna nova no meio desalinharia todas
+ * as linhas já gravadas na planilha.
  */
 export type SheetRow = {
   event:
@@ -27,6 +30,11 @@ export type SheetRow = {
   utmCampaign?: string
   utmTerm?: string
   utmContent?: string
+  // Sempre texto. O utm_id da Meta tem 18 dígitos: como número ele passa de
+  // 2^53 e vira outro id, tanto no JavaScript quanto na própria planilha, que
+  // exibiria 1,20256E+17. Quem garante o texto no Sheets é o Code.gs.
+  utmId?: string
+  fbclid?: string
   referrer?: string
   landingUrl?: string
   stripeSessionId?: string
@@ -60,6 +68,8 @@ export async function appendSheetRow(row: SheetRow): Promise<void> {
       landingUrl: row.landingUrl ?? "",
       stripeSessionId: row.stripeSessionId ?? "",
       stripePaymentIntent: row.stripePaymentIntent ?? "",
+      utmId: row.utmId ?? "",
+      fbclid: row.fbclid ?? "",
     }),
   })
 

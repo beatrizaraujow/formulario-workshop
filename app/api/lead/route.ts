@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { appendSheetRow } from "@/lib/sheets"
+import { saveLead } from "@/lib/store"
 import { contactSchema } from "@/lib/validation"
 import { handlePreflight, jsonResponse } from "@/lib/cors"
 
@@ -31,25 +31,22 @@ export async function POST(request: Request) {
     return jsonResponse(request, { ok: true })
   }
 
-  try {
-    await appendSheetRow({
-      event: "lead_criado",
-      leadId: data.leadId,
-      name: data.name,
-      email: data.email,
-      phone: data.phone,
-      utmSource: data.utmSource,
-      utmMedium: data.utmMedium,
-      utmCampaign: data.utmCampaign,
-      utmTerm: data.utmTerm,
-      utmContent: data.utmContent,
-      referrer: data.referrer,
-      landingUrl: data.landingUrl,
-    })
-  } catch (error) {
-    // Não bloqueia a conversão do usuário por causa de um erro na planilha.
-    console.error("Falha ao gravar lead na planilha:", error)
-  }
+  // saveLead não lança: não bloqueia a conversão por causa de um erro de registro.
+  await saveLead({
+    leadId: data.leadId,
+    name: data.name,
+    email: data.email,
+    phone: data.phone,
+    utmSource: data.utmSource,
+    utmMedium: data.utmMedium,
+    utmCampaign: data.utmCampaign,
+    utmTerm: data.utmTerm,
+    utmContent: data.utmContent,
+    utmId: data.utmId,
+    fbclid: data.fbclid,
+    referrer: data.referrer,
+    landingUrl: data.landingUrl,
+  })
 
   return jsonResponse(request, { ok: true })
 }

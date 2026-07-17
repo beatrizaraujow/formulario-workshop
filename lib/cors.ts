@@ -9,7 +9,7 @@ const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? "")
  */
 export function corsHeaders(requestOrigin: string | null): Record<string, string> {
   const headers: Record<string, string> = {
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
   }
 

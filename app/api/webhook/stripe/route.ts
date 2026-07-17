@@ -1,28 +1,32 @@
 import type Stripe from "stripe"
-import { appendSheetRow, type SheetRow } from "@/lib/sheets"
+import { savePayment, type PaymentInput } from "@/lib/store"
 import { getStripe } from "@/lib/stripe"
 
 async function recordSession(
   session: Stripe.Checkout.Session,
-  event: SheetRow["event"]
+  event: PaymentInput["event"]
 ): Promise<void> {
   const metadata = session.metadata ?? {}
 
-  await appendSheetRow({
+  await savePayment({
     event,
     leadId: metadata.leadId ?? "",
     name: metadata.name ?? session.customer_details?.name ?? "",
     email: session.customer_details?.email ?? "",
     phone: metadata.phone ?? "",
-    amount:
-      typeof session.amount_total === "number"
-        ? (session.amount_total / 100).toFixed(2)
-        : "",
+    // Em centavos, como o Stripe manda. Quem precisa de reais converte na hora
+    // de exibir — dinheiro não vira float aqui no meio do caminho.
+    amountCents: typeof session.amount_total === "number" ? session.amount_total : null,
+    currency: session.currency ?? "",
     utmSource: metadata.utmSource ?? "",
     utmMedium: metadata.utmMedium ?? "",
     utmCampaign: metadata.utmCampaign ?? "",
     utmTerm: metadata.utmTerm ?? "",
     utmContent: metadata.utmContent ?? "",
+    // A metadata do Stripe é sempre string, então utm_id e fbclid chegam aqui
+    // como texto e seguem como texto — nada de Number() no caminho.
+    utmId: metadata.utmId ?? "",
+    fbclid: metadata.fbclid ?? "",
     stripeSessionId: session.id,
     stripePaymentIntent:
       typeof session.payment_intent === "string" ? session.payment_intent : "",
@@ -57,7 +61,7 @@ export async function POST(request: Request) {
   if (isSessionEvent) {
     const session = event.data.object as Stripe.Checkout.Session
 
-    let row: SheetRow["event"]
+    let row: PaymentInput["event"]
     if (event.type === "checkout.session.completed") {
       // Cartão é síncrono e já chega "paid". Métodos assíncronos (Pix) chegam aqui
       // ainda não pagos — o cliente só recebeu o QR Code. Marcar aprovado agora diria
@@ -69,12 +73,10 @@ export async function POST(request: Request) {
       row = "pagamento_falhou"
     }
 
-    try {
-      await recordSession(session, row)
-    } catch (error) {
-      // Loga mas retorna 200: o evento já aconteceu do lado do Stripe, reenviar não conserta a planilha.
-      console.error(`Falha ao gravar "${row}" na planilha:`, error)
-    }
+    // Não precisa de try/catch: savePayment já loga a falha de cada destino e
+    // não lança. Sempre respondemos 200 — o pagamento já aconteceu do lado do
+    // Stripe, e pedir reenvio não conserta um destino fora do ar.
+    await recordSession(session, row)
   }
 
   return new Response(JSON.stringify({ received: true }), {

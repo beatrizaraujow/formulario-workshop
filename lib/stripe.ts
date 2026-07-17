@@ -16,6 +16,19 @@ export function getStripe(): Stripe {
   return cachedClient
 }
 
+/**
+ * Carimbo gravado em `metadata.product` de toda sessão criada por este checkout.
+ *
+ * É o que diz "esta venda é do Workshop", e não outra qualquer da mesma conta
+ * Stripe. Sem ele, bastaria validar moeda — e aí QUALQUER compra em BRL da conta
+ * (outro produto, outro funil) passaria a disparar o Purchase do Workshop.
+ *
+ * Fica fora de env de propósito: quem grava e quem confere têm que usar
+ * exatamente a mesma string, sempre. Se mudar aqui, sessões criadas antes da
+ * mudança param de ser reconhecidas.
+ */
+export const WORKSHOP_PRODUCT_TAG = "workshop_carbone"
+
 export const WORKSHOP_CURRENCY = process.env.STRIPE_CURRENCY ?? "brl"
 export const WORKSHOP_PRODUCT_NAME =
   process.env.STRIPE_PRODUCT_NAME ?? "Workshop Carbone"
