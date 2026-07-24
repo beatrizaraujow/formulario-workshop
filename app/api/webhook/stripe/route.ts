@@ -1,7 +1,7 @@
 import type Stripe from "stripe"
-import { savePayment, saveCapiFailure, type PaymentInput } from "@/lib/store"
+import { savePayment, type PaymentInput } from "@/lib/store"
 import { getStripe, WORKSHOP_PRODUCT_TAG } from "@/lib/stripe"
-import { capiInputFromSession, sendPurchaseCapi } from "@/lib/meta-capi"
+import { dispatchPurchaseCapi } from "@/lib/capi-dispatch"
 
 async function recordSession(
   session: Stripe.Checkout.Session,
@@ -32,62 +32,6 @@ async function recordSession(
     stripePaymentIntent:
       typeof session.payment_intent === "string" ? session.payment_intent : "",
   })
-}
-
-/**
- * Manda o Purchase pra Meta (CAPI) e nunca deixa isso derrubar o webhook: uma
- * falha da Meta não pode impedir o 200 pro Stripe nem o registro da venda. Se
- * o envio não confirma após as tentativas, grava capi_falhou (com o Session ID)
- * pra reenvio posterior — instabilidade da Meta não pode perder a conversão.
- */
-async function dispatchPurchaseCapi(
-  session: Stripe.Checkout.Session,
-  eventCreatedSeconds: number
-): Promise<void> {
-  try {
-    const result = await sendPurchaseCapi(
-      capiInputFromSession(session, eventCreatedSeconds)
-    )
-
-    if (result.ok) {
-      console.log("[capi] Purchase enviado", {
-        sessionId: session.id,
-        attempts: result.attempts,
-      })
-      return
-    }
-
-    if (result.skipped) {
-      // META_PIXEL_ID / META_CAPI_TOKEN ainda não configurados: não é erro.
-      console.log("[capi] envio desligado (sem PIXEL_ID/token) — Purchase não enviado", {
-        sessionId: session.id,
-      })
-      return
-    }
-
-    console.error("[capi] capi_falhou", {
-      sessionId: session.id,
-      status: result.status,
-      attempts: result.attempts,
-      detail: result.detail,
-    })
-    const metadata = session.metadata ?? {}
-    await saveCapiFailure({
-      leadId: metadata.leadId ?? "",
-      name: metadata.name ?? session.customer_details?.name ?? "",
-      email: session.customer_details?.email ?? session.customer_email ?? "",
-      phone: metadata.phone ?? "",
-      amountCents: typeof session.amount_total === "number" ? session.amount_total : null,
-      stripeSessionId: session.id,
-      stripePaymentIntent:
-        typeof session.payment_intent === "string" ? session.payment_intent : "",
-      detail: `${result.status ?? "no-status"} ${result.detail ?? ""}`.trim(),
-    })
-  } catch (error) {
-    // Cinto e suspensório: mesmo um erro inesperado aqui não pode escapar e
-    // virar 500 no webhook, o que faria o Stripe reenviar o evento inteiro.
-    console.error("[capi] erro inesperado ao enviar Purchase:", error)
-  }
 }
 
 export async function POST(request: Request) {
@@ -138,8 +82,14 @@ export async function POST(request: Request) {
     // Purchase de servidor (Meta CAPI): só para venda REALMENTE paga e que seja
     // deste produto. Mesmo event_id (session.id) do Purchase do navegador, pra
     // Meta deduplicar. event_time é o horário real da confirmação (event.created).
+    // dispatchPurchaseCapi não lança; o try é só um cinto extra — o 200 pro
+    // Stripe não pode depender da Meta de jeito nenhum.
     if (row === "pagamento_aprovado" && session.metadata?.product === WORKSHOP_PRODUCT_TAG) {
-      await dispatchPurchaseCapi(session, event.created)
+      try {
+        await dispatchPurchaseCapi(session, event.created)
+      } catch (error) {
+        console.error("[capi] erro inesperado no webhook (ignorado):", error)
+      }
     }
   }
 

@@ -1,6 +1,7 @@
 import type Stripe from "stripe"
 import { getStripe, WORKSHOP_PRODUCT_TAG } from "@/lib/stripe"
-import { capiInputFromSession, isCapiConfigured, sendPurchaseCapi } from "@/lib/meta-capi"
+import { isCapiConfigured } from "@/lib/meta-capi"
+import { dispatchPurchaseCapi, hasCapiSent, paymentTimeSeconds } from "@/lib/capi-dispatch"
 
 /**
  * Reenvio manual do Purchase (Meta CAPI) por Session ID.
@@ -39,22 +40,6 @@ const json = (body: unknown, status = 200): Response =>
     status,
     headers: { "Content-Type": "application/json" },
   })
-
-// Horário REAL da confirmação do pagamento, pra o backfill não mandar "agora"
-// como event_time. Ordem: created do charge → do payment_intent → da sessão.
-function paymentTimeSeconds(session: Stripe.Checkout.Session): number {
-  const pi = session.payment_intent
-  if (pi && typeof pi !== "string") {
-    const charge = (pi as Stripe.PaymentIntent).latest_charge
-    if (charge && typeof charge !== "string") {
-      return (charge as Stripe.Charge).created
-    }
-    if (typeof (pi as Stripe.PaymentIntent).created === "number") {
-      return (pi as Stripe.PaymentIntent).created
-    }
-  }
-  return session.created
-}
 
 export async function GET(request: Request): Promise<Response> {
   const configured = Boolean(process.env.ADMIN_TOKEN)
@@ -139,8 +124,18 @@ export async function POST(request: Request): Promise<Response> {
     )
   }
 
+  // Já enviado (ledger capiSent)? Evita contar a mesma venda duas vezes num
+  // reenvio real. Um envio de TESTE (test_event_code) ainda é permitido, porque
+  // vai pro ambiente de teste e não conta como conversão.
+  if (hasCapiSent(session) && !body.testEventCode && !body.force) {
+    return json(
+      { ok: false, error: "Já enviado antes (capiSent). Use force:true para reenviar mesmo assim.", alreadySent: true },
+      409
+    )
+  }
+
   const eventTime = paymentTimeSeconds(session)
-  const result = await sendPurchaseCapi(capiInputFromSession(session, eventTime), {
+  const result = await dispatchPurchaseCapi(session, eventTime, {
     testEventCode: body.testEventCode,
   })
 
