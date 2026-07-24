@@ -20,6 +20,9 @@ export type SheetRow = {
     | "pagamento_pendente"
     | "pagamento_aprovado"
     | "pagamento_falhou"
+    // Purchase de servidor (Meta CAPI) não confirmado após as tentativas. Fica
+    // registrado com o Session ID pra permitir reenvio (rota admin de reenvio).
+    | "capi_falhou"
   leadId: string
   name: string
   email: string

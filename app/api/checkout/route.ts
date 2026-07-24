@@ -70,6 +70,15 @@ export async function POST(request: Request) {
     )
   }
 
+  // Dados de correspondência da Meta capturados no SERVIDOR, a partir desta
+  // requisição — que vem do navegador do comprador (o fetchClientSecret roda no
+  // browser). Guardados no metadata da sessão pra que o webhook os reenvie no
+  // Purchase do CAPI. O primeiro IP do x-forwarded-for é o do cliente.
+  const clientIp = (request.headers.get("x-forwarded-for") ?? "")
+    .split(",")[0]
+    .trim()
+  const clientUa = request.headers.get("user-agent") ?? ""
+
   // Cada parâmetro vai como uma chave própria, string pura. Nada de concatenar
   // tudo numa só nem de mandar a URL inteira: chave separada é o que deixa o
   // valor legível no Dashboard e recuperável no webhook sem ter que parsear.
@@ -87,6 +96,11 @@ export async function POST(request: Request) {
     utmContent: clampMetadata(data.utmContent),
     utmId: clampMetadata(data.utmId),
     fbclid: clampMetadata(data.fbclid),
+    // Cookies do Pixel (_fbc/_fbp) e ip/ua: só o que o CAPI usa em user_data.
+    fbc: clampMetadata(data.fbc),
+    fbp: clampMetadata(data.fbp),
+    clientIp: clampMetadata(clientIp),
+    clientUa: clampMetadata(clientUa),
   }
 
   const priceId = process.env.STRIPE_PRICE_ID

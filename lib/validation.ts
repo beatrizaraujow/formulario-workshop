@@ -53,6 +53,11 @@ const attributionFields = {
   // fbclid: click id da Meta. Longo (200+ chars) e essencial para a atribuição
   // — por isso não é removido da URL, só precisa não quebrar nada.
   fbclid: tracking(FBCLID_MAX),
+  // _fbc/_fbp: cookies que o Pixel grava no navegador. Vão pro metadata da
+  // sessão do Stripe e são reusados pelo Purchase de servidor (Meta CAPI).
+  // São dados de rastreamento como os UTMs: nunca podem reprovar a requisição.
+  fbc: tracking(TRACKING_MAX),
+  fbp: tracking(TRACKING_MAX),
   referrer: tracking(URL_MAX),
   landingUrl: tracking(URL_MAX),
   // honeypot: campo invisível no formulário. Se vier preenchido, é bot.

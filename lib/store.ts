@@ -117,6 +117,43 @@ export type PaymentInput = {
   stripePaymentIntent: string
 }
 
+/**
+ * O Purchase de servidor (Meta CAPI) não confirmou depois das tentativas.
+ * Registra na planilha com o Session ID pra a venda não se perder: dá pra
+ * reenviar depois pela rota admin de reenvio. Não bloqueia nada — é só um
+ * marcador recuperável, gravado no mesmo fan-out tolerante a falha dos demais.
+ */
+export async function saveCapiFailure(input: {
+  leadId: string
+  name: string
+  email: string
+  phone: string
+  amountCents: number | null
+  stripeSessionId: string
+  stripePaymentIntent: string
+  detail: string
+}): Promise<void> {
+  await fanOut("capi_falhou", [
+    {
+      name: "planilha",
+      run: () =>
+        appendSheetRow({
+          event: "capi_falhou",
+          leadId: input.leadId,
+          name: input.name,
+          email: input.email,
+          phone: input.phone,
+          amount: input.amountCents === null ? "" : (input.amountCents / 100).toFixed(2),
+          // A causa da falha vai no campo de referrer só pra ficar visível na
+          // planilha; não há coluna dedicada e não vale desalinhar o layout.
+          referrer: input.detail.slice(0, 300),
+          stripeSessionId: input.stripeSessionId,
+          stripePaymentIntent: input.stripePaymentIntent,
+        }),
+    },
+  ])
+}
+
 /** O Stripe avisou que um pagamento mudou de estado. */
 export async function savePayment(input: PaymentInput): Promise<void> {
   const status = statusFromSheetEvent(input.event)

@@ -68,6 +68,26 @@ function createLeadId(): string {
     return `lead_${Date.now()}_${Math.random().toString(16).slice(2)}`
 }
 
+// Lê um cookie do navegador. Usado pra pegar _fbc e _fbp, que o Pixel da Meta
+// grava nesta página. Eles NÃO vão pra atribuição em cache: o Pixel pode
+// gravá-los depois do primeiro toque, então lemos fresco na hora de enviar.
+function readCookie(name: string): string {
+    if (typeof document === "undefined") return ""
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    const match = document.cookie.match(
+        new RegExp("(?:^|; )" + escaped + "=([^;]*)")
+    )
+    return match ? decodeURIComponent(match[1]) : ""
+}
+
+// _fbc/_fbp são os cookies que a Meta espera no CAPI (fbc/fbp). O backend os
+// guarda no metadata da sessão do Stripe e o webhook os reenvia no Purchase
+// de servidor — é o que faz o Purchase contar mesmo se o navegador falhar.
+const getFbCookies = (): { fbc: string; fbp: string } => ({
+    fbc: readCookie("_fbc"),
+    fbp: readCookie("_fbp"),
+})
+
 // Todo campo de atribuição vira string, sempre — inclusive utm_id, que parece
 // número mas é identificador.
 const asText = (value: unknown): string =>
@@ -243,6 +263,8 @@ export default function CheckoutForm() {
                 utmContent: attribution.utmContent,
                 utmId: attribution.utmId,
                 fbclid: attribution.fbclid,
+                // Lidos frescos: o Pixel pode ter gravado _fbc/_fbp só agora.
+                ...getFbCookies(),
                 referrer: attribution.referrer,
                 landingUrl: attribution.landingUrl,
                 honeypot,
@@ -285,6 +307,9 @@ export default function CheckoutForm() {
                                     utmContent: attribution.utmContent,
                                     utmId: attribution.utmId,
                                     fbclid: attribution.fbclid,
+                                    // _fbc/_fbp frescos: viram metadata da sessão
+                                    // e o webhook os reenvia no Purchase do CAPI.
+                                    ...getFbCookies(),
                                     referrer: attribution.referrer,
                                     landingUrl: attribution.landingUrl,
                                     honeypot,
