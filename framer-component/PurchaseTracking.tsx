@@ -41,6 +41,16 @@ const firedThisPageLoad = new Set<string>()
 // própria requisição deixou ao sair, e o evento nunca sairia.
 const inFlight = new Set<string>()
 
+// ─── LOGS TEMPORÁRIOS DE DIAGNÓSTICO ──────────────────────────────────
+// Enquanto investigamos por que o purchase_workshop não dispara em vendas
+// reais, DEBUG=true imprime cada etapa no console do navegador da
+// /obrigado-workshop. Quando o problema estiver resolvido, troque para
+// false (ou remova este bloco e as chamadas a `log(...)`).
+const DEBUG = true
+const log = (...args: unknown[]): void => {
+    if (DEBUG) console.log("[PurchaseTracking]", ...args)
+}
+
 function readFiredIds(): string[] {
     try {
         const stored = window.localStorage.getItem(STORAGE_KEY)
@@ -76,36 +86,72 @@ declare global {
 
 export default function PurchaseTracking() {
     useEffect(() => {
+        // [LOG 1] componente carregado
+        log("componente carregado", { url: window.location.href })
+
         // Roda em efeito porque `window` não existe no SSR do site publicado.
         const sessionId = new URLSearchParams(window.location.search).get(
             "session_id"
         )
 
         // Sem session_id não há o que confirmar: alguém abriu a página direto.
-        if (!sessionId) return
+        if (!sessionId) {
+            log("sem session_id na URL — página aberta direto, nada a confirmar")
+            return
+        }
+        // [LOG 2] session_id encontrado
+        log("session_id encontrado", sessionId)
+
         // Já contamos esta compra (F5, aba reaberta), ou já tem uma consulta no ar
         // por ela (efeito rodando duas vezes no mesmo carregamento).
-        if (hasFired(sessionId) || inFlight.has(sessionId)) return
+        if (hasFired(sessionId) || inFlight.has(sessionId)) {
+            log("ignorado antes da consulta", {
+                jaDisparado: hasFired(sessionId),
+                consultaEmAndamento: inFlight.has(sessionId),
+            })
+            return
+        }
 
         inFlight.add(sessionId)
+        log("consultando backend", `${API_BASE_URL}/api/checkout/session`)
 
         fetch(
             `${API_BASE_URL}/api/checkout/session?session_id=${encodeURIComponent(sessionId)}`
         )
-            .then((response) => response.json())
+            .then((response) => {
+                log("resposta HTTP recebida", {
+                    status: response.status,
+                    ok: response.ok,
+                })
+                return response.json()
+            })
             .then((result) => {
+                // [LOG 3] resposta da API recebida
+                log("resposta da API recebida", result)
+
                 // purchase vem null quando a sessão não existe, não foi paga ou
                 // está em outra moeda. Nesses casos não há compra pra contar.
                 const purchase = result?.purchase
-                if (!purchase) return
+                if (!purchase) {
+                    log(
+                        "purchase = null → nenhum evento. Motivo do backend:",
+                        result?.reason ?? "(sem reason)"
+                    )
+                    return
+                }
 
                 // Confirma pelo ID que a Stripe devolveu, não pelo que veio na
                 // URL — é ele que vai no transaction_id.
-                if (hasFired(purchase.transactionId)) return
-                markFired(purchase.transactionId)
+                if (hasFired(purchase.transactionId)) {
+                    log(
+                        "ignorado: transactionId já disparado antes",
+                        purchase.transactionId
+                    )
+                    return
+                }
 
                 window.dataLayer = window.dataLayer || []
-                window.dataLayer.push({
+                const evento = {
                     event: "purchase_workshop",
                     // Os dois carregam o mesmo id da sessão, mas servem a coisas
                     // diferentes: transaction_id é a venda (GA4), event_id é o
@@ -119,12 +165,31 @@ export default function PurchaseTracking() {
                     // o GTM/GA4 espera reais.
                     value: purchase.amountCents / 100,
                     currency: purchase.currency.toUpperCase(),
+                }
+
+                // [LOG 4] antes do dataLayer.push
+                log("antes do dataLayer.push", evento)
+                window.dataLayer.push(evento)
+                // [LOG 5] depois do dataLayer.push
+                log("depois do dataLayer.push — evento enfileirado no dataLayer", {
+                    tamanhoDataLayer: window.dataLayer.length,
                 })
+
+                // Item 6: só marca a sessão como disparada DEPOIS que o push
+                // aconteceu. Se o push lançasse um erro síncrono, a sessão ficaria
+                // sem marca e uma nova tentativa ainda poderia contar a compra —
+                // em vez de ser silenciosamente "já disparada" sem nunca ter ido.
+                markFired(purchase.transactionId)
             })
             .catch((error) => {
                 // Deu ruim na confirmação: melhor não contar a compra do que
                 // contar uma que talvez não exista. A venda em si está salva —
                 // o webhook da Stripe registra o pagamento por outro caminho.
+                log(
+                    "FALHA no fetch/confirmação:",
+                    error,
+                    "— 'Failed to fetch' aqui costuma ser CORS (ALLOWED_ORIGINS no Vercel não inclui o domínio da página) ou API_BASE_URL errado"
+                )
                 console.error("Falha ao confirmar a compra:", error)
             })
             .finally(() => {

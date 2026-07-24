@@ -20,7 +20,17 @@ export async function OPTIONS(request: Request) {
 export async function GET(request: Request) {
   const sessionId = new URL(request.url).searchParams.get("session_id")
 
+  // LOG TEMPORÁRIO — aparece em Vercel > Deployment > Functions > Logs.
+  // Serve pra responder, sem depender do console do cliente: (2) a página de
+  // obrigado chegou a chamar este endpoint? (3) com qual resultado?
+  // Remover quando o rastreamento estiver confirmado.
+  console.log("[checkout/session] chamada recebida", {
+    origin: request.headers.get("origin"),
+    sessionId,
+  })
+
   if (!sessionId || !sessionId.startsWith("cs_")) {
+    console.log("[checkout/session] resposta: purchase=null, reason=sem_session_id")
     return jsonResponse(request, { ok: true, purchase: null, reason: "sem_session_id" })
   }
 
@@ -36,6 +46,7 @@ export async function GET(request: Request) {
       error !== null &&
       (error as { code?: string }).code === "resource_missing"
     ) {
+      console.log("[checkout/session] resposta: purchase=null, reason=sessao_inexistente")
       return jsonResponse(request, { ok: true, purchase: null, reason: "sessao_inexistente" })
     }
 
@@ -52,6 +63,10 @@ export async function GET(request: Request) {
   // outro funil — dispararia o Purchase do Workshop. O `metadata.product` é
   // gravado pelo nosso próprio backend em /api/checkout, não vem do visitante.
   if (session.metadata?.product !== WORKSHOP_PRODUCT_TAG) {
+    console.log("[checkout/session] resposta: purchase=null, reason=outro_produto", {
+      productNaSessao: session.metadata?.product ?? "(vazio)",
+      esperado: WORKSHOP_PRODUCT_TAG,
+    })
     return jsonResponse(request, { ok: true, purchase: null, reason: "outro_produto" })
   }
 
@@ -63,8 +78,20 @@ export async function GET(request: Request) {
   const amountCents = session.amount_total
 
   if (!isPaid || !hasExpectedCurrency || typeof amountCents !== "number" || amountCents <= 0) {
+    console.log("[checkout/session] resposta: purchase=null, reason=nao_pago", {
+      status: session.status,
+      payment_status: session.payment_status,
+      currency: session.currency,
+      amount_total: session.amount_total,
+    })
     return jsonResponse(request, { ok: true, purchase: null, reason: "nao_pago" })
   }
+
+  console.log("[checkout/session] resposta: purchase OK — vai disparar purchase_workshop", {
+    transactionId: session.id,
+    amountCents,
+    currency: session.currency,
+  })
 
   // Só o mínimo que o dataLayer precisa. O resto da sessão (e-mail, endereço,
   // payment_intent) não sai daqui: quem pede este endpoint é o navegador, e
